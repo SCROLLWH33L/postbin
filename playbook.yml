@@ -1,0 +1,115 @@
+---
+- hosts: all
+  become: true
+  vars:
+    username: alvin
+  tasks:
+
+  - name: Change root password
+    user:
+      name: root
+      password: '!'
+
+  - name: Add unprivileged user
+    user:
+      name: '{{ username }}'
+      password: '!'
+      shell: /bin/bash
+
+  - name: Disable SSH root login
+    lineinfile:
+      dest: /etc/ssh/sshd_config
+      regexp: '^#?PermitRootLogin'
+      line: 'PermitRootLogin no'
+    notify:
+    - Restart SSH
+
+  - name: Update APT cache
+    apt:
+      update_cache: yes
+
+  - name: Install required packages
+    apt:
+      name:
+      - vsftpd
+      - python3-flask
+      - gunicorn
+      state: latest
+  
+  - name: Allow anonymous FTP
+    lineinfile:
+      dest: /etc/vsftpd.conf
+      regexp: ^#?anonymous_enable
+      line: anonymous_enable=YES
+    notify:
+    - Restart FTP
+
+  - name: Allow FTP write
+    lineinfile:
+      dest: /etc/vsftpd.conf
+      regexp: ^#?write_enable
+      line: write_enable=YES
+    notify:
+    - Restart FTP
+
+  - name: Allow FTP anonymous upload
+    lineinfile:
+      dest: /etc/vsftpd.conf
+      regexp: ^#?anon_upload_enable
+      line: anon_upload_enable=YES
+    notify:
+    - Restart FTP
+
+  - name: Create /srv/ftp/postbin
+    file:
+      path: /srv/ftp/postbin
+      state: directory
+      owner: ftp
+      group: ftp
+
+  - name: Set FTP anonymous umask
+    lineinfile:
+      dest: /etc/vsftpd.conf
+      insertafter: ^#?local_umask
+      line: anon_umask=022
+
+  - name: Copy postbin directory to remote
+    copy:
+      src: postbin
+      dest: '/home/{{ username }}'
+      owner: '{{ username }}'
+      group: '{{ username }}'
+
+  - name: Create .ssh directory
+    file:
+      path: '/home/{{ username }}/.ssh'
+      state: directory
+      mode: 0700
+      owner: '{{ username }}'
+      group: '{{ username }}'
+
+  - name: Add users to sudoers
+    copy:
+      src: '{{ username }}'
+      dest: '/etc/sudoers.d/{{ username }}'
+      mode: 0440
+  
+  - name: Start gunicorn
+    shell:
+      cmd: sudo -u {{ username }} sudo /usr/bin/gunicorn --bind 0.0.0.0:80 --chdir /home/{{ username }}/postbin/prod app:app &
+
+  - name: Start flask
+    shell:
+      cmd: sudo -u {{ username }} flask --app app:app run --host 0.0.0.0 --debugger &
+      chdir: /home/{{ username }}/postbin/dev
+
+  handlers:
+  - name: Restart FTP
+    service:
+      name: vsftpd
+      state: restarted
+
+  - name: Restart SSH
+    service:
+      name: sshd
+      state: restarted
